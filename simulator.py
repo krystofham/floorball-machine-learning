@@ -566,7 +566,7 @@ def predict_scorers(team_name, lam_team):
         prob_goal   = 1 - np.exp(-expected_goals)
         prob_assist = 1 - np.exp(-expected_assists)
 
-        if prob_goal > 0.02 or prob_assist > 0.05:
+        if prob_goal > 0.05:
             result.append({
                 "name":             p["name"],
                 "prob_goal":        prob_goal,
@@ -576,7 +576,7 @@ def predict_scorers(team_name, lam_team):
                 "expected_assists": expected_assists,
                 "std_assists":      std_assists,
             })
-    return sorted(result, key=lambda x: x["prob_goal"], reverse=True)[:6]
+    return sorted(result, key=lambda x: x["prob_goal"], reverse=True)
 
 
 # ── Simulace ───────────────────────────────────────────────
@@ -622,35 +622,38 @@ def simulate(home, away):
                    if (m["home"]==home and m["away"]==away)
                    or (m["home"]==away and m["away"]==home)])
 
-    SEP = "=" * 62
-    print(f"\n{SEP}")
-    print(f"  {home}  vs  {away}")
-    print(f"{SEP}")
-    print(f"  ML očekávané góly:  {lam_h:.2f} ± {np.sqrt(lam_h):.2f}  :  {lam_a:.2f} ± {np.sqrt(lam_a):.2f}")
+    lines = []
+    lines.append(f"{home} vs {away}")
+    lines.append("")
+    lines.append(f"Očekávané góly: {lam_h:.2f} +/- {np.sqrt(lam_h):.2f} : {lam_a:.2f} +/- {np.sqrt(lam_a):.2f}")
     if h2h_h is not None:
-        print(f"  H2H průměr gólů:    {h2h_h:.1f} : {h2h_a:.1f}  ({n_h2h} vzáj. zápasů)")
-    print(f"  Forma domácích:     GF={hf_home['form_gf']:.1f}  GA={hf_home['form_ga']:.1f}  body/z={hf_home['form_pts']:.1f}")
-    print(f"  Forma hostů:        GF={hf_away['form_gf']:.1f}  GA={hf_away['form_ga']:.1f}  body/z={hf_away['form_pts']:.1f}")
-    print(f"  Výhra domácích:     {np.mean(hg > ag)*100:.1f}%")
-    print(f"  Výhra hostů:        {np.mean(ag > hg)*100:.1f}%")
-    print(f"  Remíza (60 min):    {np.mean(hg == ag)*100:.1f}%")
-    print(f"  Průměr gólů:        {np.mean(hg + ag):.1f}  (σ domácí={std_hg:.2f}, σ hosté={std_ag:.2f})")
-    print(f"  Nejpravděpodobnější výsledky:")
+        lines.append(f"H2H průměr: {h2h_h:.1f} : {h2h_a:.1f} ({n_h2h} zápasů)")
+    lines.append(f"Forma domácích: GF={hf_home['form_gf']:.1f} GA={hf_home['form_ga']:.1f} body/z={hf_home['form_pts']:.1f}")
+    lines.append(f"Forma hostů:    GF={hf_away['form_gf']:.1f} GA={hf_away['form_ga']:.1f} body/z={hf_away['form_pts']:.1f}")
+    lines.append("")
+    lines.append(f"Výhra domácích: {np.mean(hg > ag)*100:.1f}%")
+    lines.append(f"Výhra hostů:    {np.mean(ag > hg)*100:.1f}%")
+    lines.append(f"Remíza (60 min): {np.mean(hg == ag)*100:.1f}%")
+    lines.append(f"Průměr gólů: {np.mean(hg + ag):.1f} (sigma dom={std_hg:.2f}, host={std_ag:.2f})")
+    lines.append("")
+    lines.append("Nejpravděpodobnější výsledky:")
     for (h, a), cnt in top:
-        print(f"    {h}:{a}  →  {cnt / N_SIM * 100:.1f}%")
+        lines.append(f"  {h}:{a}  {cnt / N_SIM * 100:.1f}%")
 
     for team, lam in [(home, lam_h), (away, lam_a)]:
         scorers = predict_scorers(team, lam)
         if not scorers:
             continue
-        print(f"\n  Kandidáti – {team}:")
-        print(f"  {'Hráč':<24} {'P(gól)':>7}  {'Oč.G ± σ':>10}  {'P(as)':>6}  {'Oč.A ± σ':>10}")
+        lines.append("")
+        lines.append(f"Kandidáti - {team}:")
         for s in scorers:
-            print(f"  {s['name']:<24}"
-                  f" {s['prob_goal']*100:>6.1f}%"
-                  f"  {s['expected_goals']:>4.2f} ± {s['std_goals']:>4.2f}"
-                  f"  {s['prob_assist']*100:>5.1f}%"
-                  f"  {s['expected_assists']:>4.2f} ± {s['std_assists']:>4.2f}")
+            lines.append(
+                f"  {s['name']}  "
+                f"gól={s['prob_goal']*100:.1f}% ({s['expected_goals']:.2f}+/-{s['std_goals']:.2f})  "
+                f"as={s['prob_assist']*100:.1f}% ({s['expected_assists']:.2f}+/-{s['std_assists']:.2f})"
+            )
+
+    print("\n" + "\n".join(lines))
 
 
 for home, away in MATCHES_TO_SIMULATE:
