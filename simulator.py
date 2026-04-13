@@ -556,24 +556,25 @@ def predict_scorers(team_name, lam_team):
 
     result = []
     for p in players:
-        expected_goals  = lam_team * (p["score_g"] / total_g)
-        # Průměrný počet asistencí na gól je ~1.5 (florbal má často 1-2 asistenty)
-        # Odhadneme expected_assists jako podíl hráče z celkového počtu asistencí týmu
-        # Celkové asistence týmu ≈ lam_team * 1.5
+        expected_goals   = lam_team * (p["score_g"] / total_g)
         expected_assists = lam_team * 1.5 * (p["score_a"] / total_a)
-        prob_goal        = 1 - np.exp(-expected_goals)
-        prob_assist      = 1 - np.exp(-expected_assists)
+
+        # Směrodatná odchylka – pro Poissonovo rozdělení σ = sqrt(λ)
+        std_goals   = np.sqrt(expected_goals)
+        std_assists = np.sqrt(expected_assists)
+
+        prob_goal   = 1 - np.exp(-expected_goals)
+        prob_assist = 1 - np.exp(-expected_assists)
+
         if prob_goal > 0.02 or prob_assist > 0.05:
             result.append({
                 "name":             p["name"],
                 "prob_goal":        prob_goal,
                 "prob_assist":      prob_assist,
                 "expected_goals":   expected_goals,
+                "std_goals":        std_goals,
                 "expected_assists": expected_assists,
-                "form_g":           p.get("form_goals",   0.0),
-                "form_a":           p.get("form_assists", 0.0),
-                "season_avg_g":     p["goals"]   / max(p["games"], 1),
-                "season_avg_a":     p["assists"] / max(p["games"], 1),
+                "std_assists":      std_assists,
             })
     return sorted(result, key=lambda x: x["prob_goal"], reverse=True)[:6]
 
@@ -611,6 +612,10 @@ def simulate(home, away):
     ag  = np.random.poisson(lam_a, N_SIM)
     top = Counter(zip(hg, ag)).most_common(5)
 
+    # Simulační směrodatné odchylky počtu gólů
+    std_hg = float(np.std(hg))
+    std_ag = float(np.std(ag))
+
     hf_home = team_form(home, matches_list)
     hf_away = team_form(away, matches_list)
     n_h2h   = len([m for m in matches_list
@@ -621,7 +626,7 @@ def simulate(home, away):
     print(f"\n{SEP}")
     print(f"  {home}  vs  {away}")
     print(f"{SEP}")
-    print(f"  ML očekávané góly:  {lam_h:.2f} : {lam_a:.2f}")
+    print(f"  ML očekávané góly:  {lam_h:.2f} ± {np.sqrt(lam_h):.2f}  :  {lam_a:.2f} ± {np.sqrt(lam_a):.2f}")
     if h2h_h is not None:
         print(f"  H2H průměr gólů:    {h2h_h:.1f} : {h2h_a:.1f}  ({n_h2h} vzáj. zápasů)")
     print(f"  Forma domácích:     GF={hf_home['form_gf']:.1f}  GA={hf_home['form_ga']:.1f}  body/z={hf_home['form_pts']:.1f}")
@@ -629,7 +634,7 @@ def simulate(home, away):
     print(f"  Výhra domácích:     {np.mean(hg > ag)*100:.1f}%")
     print(f"  Výhra hostů:        {np.mean(ag > hg)*100:.1f}%")
     print(f"  Remíza (60 min):    {np.mean(hg == ag)*100:.1f}%")
-    print(f"  Průměr gólů:        {np.mean(hg + ag):.1f}")
+    print(f"  Průměr gólů:        {np.mean(hg + ag):.1f}  (σ domácí={std_hg:.2f}, σ hosté={std_ag:.2f})")
     print(f"  Nejpravděpodobnější výsledky:")
     for (h, a), cnt in top:
         print(f"    {h}:{a}  →  {cnt / N_SIM * 100:.1f}%")
@@ -639,17 +644,13 @@ def simulate(home, away):
         if not scorers:
             continue
         print(f"\n  Kandidáti – {team}:")
-        print(f"  {'Hráč':<24} {'P(gól)':>7}  {'Oč.G':>5}  {'P(as)':>6}  {'Oč.A':>5}  {'FG':>5}  {'FA':>5}  {'SG':>5}  {'SA':>5}")
+        print(f"  {'Hráč':<24} {'P(gól)':>7}  {'Oč.G ± σ':>10}  {'P(as)':>6}  {'Oč.A ± σ':>10}")
         for s in scorers:
             print(f"  {s['name']:<24}"
                   f" {s['prob_goal']*100:>6.1f}%"
-                  f"  {s['expected_goals']:>4.2f}"
+                  f"  {s['expected_goals']:>4.2f} ± {s['std_goals']:>4.2f}"
                   f"  {s['prob_assist']*100:>5.1f}%"
-                  f"  {s['expected_assists']:>4.2f}"
-                  f"  {s['form_g']:>5.2f}"
-                  f"  {s['form_a']:>5.2f}"
-                  f"  {s['season_avg_g']:>5.2f}"
-                  f"  {s['season_avg_a']:>5.2f}")
+                  f"  {s['expected_assists']:>4.2f} ± {s['std_assists']:>4.2f}")
 
 
 for home, away in MATCHES_TO_SIMULATE:
