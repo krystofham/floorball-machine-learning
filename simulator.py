@@ -1,5 +1,5 @@
 """
-Florbal simulátor s SQLite cache
+Florbal simulátor s SQLite cache + HTML výstup
 Hráče tahá ze zápisů zápasů (ne ze soupisky), takže zachytí i hosty a hráče z jiných soutěží.
 
 Použití:
@@ -8,6 +8,7 @@ Použití:
   python simulator.py --refresh-players  # přestáhne jen hráče/formu
   python simulator.py --refresh-matches  # přestáhne jen zápasy
 
+Výstup: report.html (ve stejném adresáři)
 DB soubor: florbal.db (ve stejném adresáři)
 """
 
@@ -20,6 +21,8 @@ import unicodedata
 import warnings
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -39,6 +42,7 @@ COMPETITION_FILTER = "liga dorostenců"
 MAX_WORKERS   = 8
 DB_FILE       = "florbal.db"
 CACHE_TTL_H   = 12
+HTML_OUTPUT   = "index.html"
 
 TEAMS = {
     "1. SC NATIOS Vítkovice B":  "42747",
@@ -160,7 +164,6 @@ def get_matches(team_id):
         if ":" not in score_clean:
             continue
 
-        # Vytáhni match_id z odkazu
         match_id = ""
         link = score_tag.select_one("a[href*='/match/detail/']")
         if link:
@@ -193,28 +196,14 @@ def get_matches(team_id):
     return results
 
 # ── Scraping hráčů ze zápisu ──────────────────────────────
-#
-# Struktura detailu zápasu na ceskyflorbal.cz:
-#   .MatchCenter-teamTitle-home  → zkrácený název domácích (např. "Horní SucháHSH")
-#   .MatchCenter-teamTitle-quest → zkrácený název hostů
-#   .MatchCenter-player-home     → každý domácí hráč (odkaz na profil)
-#   .MatchCenter-player-quest    → každý hostující hráč
-#   .MatchCenter-statistics--left  → tabulky statistik domácích (1.góly 2.asistence 3.TM)
-#   .MatchCenter-statistics--right → tabulky statistik hostů
-#   Řádek stat. tabulky: cells=[jméno, počet] + odkaz na hráče
 
 def _fix_name(s):
-    """Opraví slité jméno 'MartinBÚRAN' → 'Martin Búran' a odstraní pozici."""
     s = re.sub(r"([a-záčďéěíňóřšťúůýž])([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])", r"\1 \2", s)
     s = re.sub(r"\s*(brankář|útočník|obránce|záložník)\s*$", "", s, flags=re.IGNORECASE)
     return s.strip()
 
 
 def get_match_lineups(match_id):
-    """
-    Ze zápisu stáhne soupisky obou týmů s góly a asistencemi.
-    Vrátí dict: { zkrácený_název_týmu: [ {player_id, name, goals, assists} ] }
-    """
     url = f"https://www.ceskyflorbal.cz/match/detail/default/{match_id}"
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
@@ -224,7 +213,6 @@ def get_match_lineups(match_id):
 
     soup = BeautifulSoup(r.text, "html.parser")
 
-    # 1. Zkrácené názvy týmů (ořež 2–4 písmennou zkratku na konci)
     def clean_title(el):
         txt = el.get_text(strip=True)
         return re.sub(r"[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]{2,4}$", "", txt).strip()
@@ -237,7 +225,6 @@ def get_match_lineups(match_id):
     home_short  = clean_title(home_el)
     guest_short = clean_title(guest_el)
 
-    # 2. Sestavy – kdo nastoupil
     def extract_pids(selector):
         pids = {}
         for el in soup.select(selector):
@@ -252,7 +239,6 @@ def get_match_lineups(match_id):
     home_pids  = extract_pids(".MatchCenter-player-home")
     guest_pids = extract_pids(".MatchCenter-player-quest")
 
-    # 3. Stat tabulky: [0]=góly [1]=asistence
     def parse_stat_table(table):
         out = {}
         for row in table.select("tr"):
@@ -279,7 +265,6 @@ def get_match_lineups(match_id):
     home_assists  = parse_stat_table(left_tables[1])  if len(left_tables)  > 1 else {}
     guest_assists = parse_stat_table(right_tables[1]) if len(right_tables) > 1 else {}
 
-    # 4. Sestav výsledek
     def build(pids, goals_map, assists_map):
         return [{"player_id": pid, "name": name,
                  "goals": goals_map.get(pid, 0), "assists": assists_map.get(pid, 0)}
@@ -302,10 +287,6 @@ def normalize(s):
 
 
 def build_team_players_from_matches(team_name, team_matches, all_match_lineups, debug=False):
-    """
-    Agreguje statistiky hráčů z jednotlivých zápisů zápasů.
-    Klíče v lineups jsou zkrácené názvy z webu (např. "Vítkovice", "Horní Suchá").
-    """
     player_stats = defaultdict(lambda: {"name": "", "goals": 0, "assists": 0, "games": 0})
     matched_count = 0
     missed_count  = 0
@@ -320,15 +301,11 @@ def build_team_players_from_matches(team_name, team_matches, all_match_lineups, 
             missed_count += 1
             continue
 
-        # Hledáme soupisku pro náš tým:
-        # Zkrácený název ze zápisu musí být podřetězcem plného názvu týmu,
-        # nebo naopak. Normalizujeme (bez diakritiky, lowercase).
         team_players = None
         norm_tn = normalize(team_name)
 
         for lineup_team, players in lineups.items():
             norm_lt = normalize(lineup_team)
-            # Přesný match nebo jeden obsahuje druhý
             if norm_lt == norm_tn or norm_lt in norm_tn or norm_tn in norm_lt:
                 team_players = players
                 break
@@ -367,12 +344,6 @@ def build_team_players_from_matches(team_name, team_matches, all_match_lineups, 
 # ── Forma hráče ────────────────────────────────────────────
 
 def get_player_form(player_id, competition_filter=COMPETITION_FILTER, n=FORM_GAMES):
-    """
-    Vrátí formu hráče (průměr posledních n zápasů v competition_filter)
-    a také sezónní součty ze VŠECH soutěží (season_goals, season_assists, season_games).
-    Sezónní součty použijeme jako fallback/korekci pokud záznamy zápasů
-    zachytily jen část hráčovy aktivity (hraje ve více soutěžích).
-    """
     url = f"https://www.ceskyflorbal.cz/person/detail/player/{player_id}"
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
@@ -382,9 +353,6 @@ def get_player_form(player_id, competition_filter=COMPETITION_FILTER, n=FORM_GAM
     soup = BeautifulSoup(r.text, "html.parser")
     tables = soup.select("table")
 
-    # ── A) Sezónní součty ze soutěžní tabulky (Soutěž / Z / B / A) ──
-    # Bereme VŠECHNY řádky aktuální sezóny (ne jen filtrovanou soutěž),
-    # protože hráč může hrát za stejný tým ve více soutěžích.
     season_goals = 0
     season_assists = 0
     season_games = 0
@@ -413,7 +381,6 @@ def get_player_form(player_id, competition_filter=COMPETITION_FILTER, n=FORM_GAM
         if season_games > 0:
             break
 
-    # ── B) Forma: posledních n zápasů filtrovaných dle competition_filter ──
     game_rows = []
     for t in tables:
         hdrs = [th.get_text(strip=True) for th in t.select("th")]
@@ -540,7 +507,6 @@ for name in SIM_TEAMS:
     else:
         teams_to_fetch.append(name)
 
-# Pro týmy mimo simulaci – prázdná data (pro model stačí zápasy)
 for name in TEAMS:
     if name not in team_player_data:
         team_player_data[name] = []
@@ -548,7 +514,6 @@ for name in TEAMS:
 if teams_to_fetch:
     print(f"\nStahuji záznamy zápasů a hráče pro: {', '.join(teams_to_fetch)}")
 
-    # Zjisti které match_id jsou relevantní pro simulované týmy
     sim_match_ids = set()
     team_to_matches = defaultdict(list)
     for m in matches_list:
@@ -561,7 +526,6 @@ if teams_to_fetch:
 
     print(f"  Stáhuji {len(sim_match_ids)} zápisů zápasů...")
 
-    # Stáhni záznamy zápasů paralelně
     all_match_lineups = {}
 
     def fetch_lineup(mid):
@@ -577,7 +541,6 @@ if teams_to_fetch:
             if done % 5 == 0 or done == len(sim_match_ids):
                 print(f"    Záznamy: {done}/{len(sim_match_ids)}")
 
-    # Agreguj hráče pro každý tým
     for team in teams_to_fetch:
         t_matches = team_to_matches[team]
         players = build_team_players_from_matches(team, t_matches, all_match_lineups, debug=True)
@@ -608,14 +571,12 @@ if teams_to_fetch:
 
         print(f"  {team}: {len(players)} hráčů z zápisů zápasů")
 
-        # Stáhni formu hráčů paralelně + korekce ze sezónních součtů z profilu
         def fetch_form(p):
             form = get_player_form(p["player_id"])
             result = {**p, **form}
             sg = form.get("season_goals",   0)
             sa = form.get("season_assists", 0)
             sz = form.get("season_games",   0)
-            # Hráč může hrát ve více soutěžích – profil má kompletní data
             if sz > result["games"] or sg > result["goals"]:
                 result["goals"]   = max(sg, result["goals"])
                 result["assists"] = max(sa, result["assists"])
@@ -627,12 +588,6 @@ if teams_to_fetch:
 
         ok = sum(1 for p in players if p.get("form_goals", 0) > 0)
         print(f"    z toho {ok} s formou > 0")
-        for p in players:
-            sg = p.get("season_goals", 0)
-            sz = p.get("season_games", 0)
-            if sz > 0 and (sz != p["games"] or sg != p["goals"]):
-                print(f"    [korekce] {p['name']}: {p['games']}Z/{p['goals']}G "
-                      f"(profil: {sz}Z/{sg}G)")
 
         team_player_data[team] = players
         db_save_players(conn, team, players)
@@ -689,33 +644,23 @@ def predict_scorers(team_name, lam_team):
     if not players:
         return []
 
-    # ── Bayesovský prior ──────────────────────────────────────
-    # Hráč s 1 gólem v 1 zápase dostane průměr blízký průměru týmu, ne 1.0.
-    # prior_strength = kolik "fiktivních" zápasů přidáme s průměrem ligy.
-    # Čím více reálných zápasů hráč má, tím méně prior ovlivní výsledek.
-    # Typicky: hráč s < 3 zápasy je silně přitažen k průměru.
-    PRIOR_STRENGTH = 4  # ekvivalent 4 průměrných zápasů jako prior
+    PRIOR_STRENGTH = 4
 
     all_games = sum(p["games"] for p in players)
     all_goals = sum(p["goals"] for p in players)
     all_assists = sum(p["assists"] for p in players)
 
-    # Průměr na zápas přes celý tým (ligový prior)
     league_avg_g = (all_goals   / all_games) if all_games > 0 else 0.1
     league_avg_a = (all_assists / all_games) if all_games > 0 else 0.1
 
     for p in players:
         g = p["games"]
-        # Bayesovský odhad: (skutečné góly + prior) / (skutečné zápasy + prior_strength)
         bayes_avg_g = (p["goals"]   + PRIOR_STRENGTH * league_avg_g) / (g + PRIOR_STRENGTH)
         bayes_avg_a = (p["assists"] + PRIOR_STRENGTH * league_avg_a) / (g + PRIOR_STRENGTH)
 
         form_avg_g = p.get("form_goals",   0.0)
         form_avg_a = p.get("form_assists", 0.0)
 
-        # Forma (posledních 5 zápasů) má váhu jen pokud existuje
-        # Forma také prochází Bayesovským vyhlazením – jen mírnějším (kratší okno)
-        FORM_PRIOR = 2
         if form_avg_g > 0:
             p["score_g"] = (0.35 * bayes_avg_g + 0.65 * form_avg_g)
         else:
@@ -771,6 +716,7 @@ def make_x_pred(atk, defn, is_home):
 
 
 def simulate(home, away):
+    """Vrátí slovník s výsledky simulace pro HTML generátor."""
     lam_h = model.predict([make_x_pred(home, away, True)])[0]
     lam_a = model.predict([make_x_pred(away, home, False)])[0]
 
@@ -786,8 +732,6 @@ def simulate(home, away):
     hg  = np.random.poisson(lam_h, N_SIM)
     ag  = np.random.poisson(lam_a, N_SIM)
     top = Counter(zip(hg, ag)).most_common(5)
-    std_hg = float(np.std(hg))
-    std_ag = float(np.std(ag))
 
     hf_home = team_form(home, matches_list)
     hf_away = team_form(away, matches_list)
@@ -795,47 +739,742 @@ def simulate(home, away):
                    if (m["home"]==home and m["away"]==away)
                    or (m["home"]==away and m["away"]==home)])
 
-    sep = "─" * 60
-    lines = []
-    lines.append(sep)
-    lines.append(f"  {home}  vs  {away}")
-    lines.append(sep)
-    lines.append(f"Očekávané góly: {lam_h:.2f} ± {np.sqrt(lam_h):.2f}  :  {lam_a:.2f} ± {np.sqrt(lam_a):.2f}")
-    if h2h_h is not None:
-        lines.append(f"H2H průměr:     {h2h_h:.1f} : {h2h_a:.1f}  ({n_h2h} vzájemný{'ch zápasů' if n_h2h > 1 else ' zápas'})")
-    lines.append(f"Forma domácích: GF={hf_home['form_gf']:.1f}  GA={hf_home['form_ga']:.1f}  body/z={hf_home['form_pts']:.1f}")
-    lines.append(f"Forma hostů:    GF={hf_away['form_gf']:.1f}  GA={hf_away['form_ga']:.1f}  body/z={hf_away['form_pts']:.1f}")
-    lines.append("")
-    lines.append(f"Výhra domácích:   {np.mean(hg > ag)*100:.1f}%")
-    lines.append(f"Výhra hostů:      {np.mean(ag > hg)*100:.1f}%")
-    lines.append(f"Remíza (60 min):  {np.mean(hg == ag)*100:.1f}%")
-    lines.append(f"Průměr gólů:      {np.mean(hg + ag):.1f}  (σ dom={std_hg:.2f}, host={std_ag:.2f})")
-    lines.append("")
-    lines.append("Nejpravděpodobnější výsledky:")
-    for (h, a), cnt in top:
-        lines.append(f"  {h}:{a}  →  {cnt / N_SIM * 100:.1f}%")
+    scorers_home = predict_scorers(home, lam_h)
+    scorers_away = predict_scorers(away, lam_a)
 
-    for team, lam in [(home, lam_h), (away, lam_a)]:
-        scorers = predict_scorers(team, lam)
-        if not scorers:
-            lines.append(f"\n  [!] {team}: žádná data o hráčích")
-            continue
-        lines.append(f"\nKandidáti na góly – {team}:")
-        lines.append(f"  {'Hráč':<28} {'Z':>3} {'G':>3} {'A':>3}  {'gól%':>6}  {'očekáv.±σ':>10}  {'as%':>6}  {'očekáv.±σ':>10}")
-        lines.append(f"  {'─'*28} {'─'*3} {'─'*3} {'─'*3}  {'─'*6}  {'─'*10}  {'─'*6}  {'─'*10}")
-        for s in scorers:
-            lines.append(
-                f"  {s['name']:<28} "
-                f"{s['games']:>3} {s['goals']:>3} {s['assists']:>3}  "
-                f"{s['prob_goal']*100:>5.1f}%  "
-                f"{s['expected_goals']:>4.2f}±{s['std_goals']:.2f}  "
-                f"{s['prob_assist']*100:>5.1f}%  "
-                f"{s['expected_assists']:>4.2f}±{s['std_assists']:.2f}"
-            )
-
-    lines.append(sep)
-    print("\n" + "\n".join(lines))
+    return {
+        "home": home,
+        "away": away,
+        "lam_h": lam_h,
+        "lam_a": lam_a,
+        "lam_h_std": np.sqrt(lam_h),
+        "lam_a_std": np.sqrt(lam_a),
+        "prob_home_win": float(np.mean(hg > ag)),
+        "prob_away_win": float(np.mean(ag > hg)),
+        "prob_draw":     float(np.mean(hg == ag)),
+        "avg_total_goals": float(np.mean(hg + ag)),
+        "std_home": float(np.std(hg)),
+        "std_away": float(np.std(ag)),
+        "top_scores": [{"h": h, "a": a, "pct": cnt / N_SIM * 100} for (h, a), cnt in top],
+        "h2h_h": h2h_h,
+        "h2h_a": h2h_a,
+        "n_h2h": n_h2h,
+        "form_home": hf_home,
+        "form_away": hf_away,
+        "scorers_home": scorers_home,
+        "scorers_away": scorers_away,
+    }
 
 
+# ── HTML generátor ─────────────────────────────────────────
+
+def pct_bar(value, max_val=1.0, color="var(--accent)"):
+    width = min(100, value / max_val * 100)
+    return f'<div class="bar-track"><div class="bar-fill" style="width:{width:.1f}%;background:{color}"></div></div>'
+
+
+def scorers_table_html(scorers, team_name, lam_team):
+    if not scorers:
+        return f'<p class="no-data">Žádná data o hráčích pro {team_name}</p>'
+
+    max_xg = max(s["expected_goals"] for s in scorers) or 1.0
+    max_xa = max(s["expected_assists"] for s in scorers) or 1.0
+
+    rows_html = ""
+    for i, s in enumerate(scorers):
+        medal = ""
+        if i == 0: medal = '<span class="medal gold">★</span>'
+        elif i == 1: medal = '<span class="medal silver">★</span>'
+        elif i == 2: medal = '<span class="medal bronze">★</span>'
+
+        xg_bar   = pct_bar(s["expected_goals"],   max_xg, "var(--accent-g)")
+        xa_bar   = pct_bar(s["expected_assists"],  max_xa, "var(--accent-a)")
+        prob_bar = pct_bar(s["prob_goal"], 1.0, "var(--accent)")
+
+        rows_html += f"""
+        <tr class="player-row">
+          <td class="player-name">{medal}{s['name']}</td>
+          <td class="stat-cell">{s['games']}</td>
+          <td class="stat-cell">{s['goals']}</td>
+          <td class="stat-cell">{s['assists']}</td>
+          <td class="bar-cell">
+            <div class="bar-label">{s['prob_goal']*100:.1f}%</div>
+            {prob_bar}
+          </td>
+          <td class="bar-cell">
+            <div class="bar-label">{s['expected_goals']:.2f} <span class="sigma">±{s['std_goals']:.2f}</span></div>
+            {xg_bar}
+          </td>
+          <td class="bar-cell">
+            <div class="bar-label">{s['prob_assist']*100:.1f}%</div>
+            {xa_bar}
+          </td>
+          <td class="bar-cell">
+            <div class="bar-label">{s['expected_assists']:.2f} <span class="sigma">±{s['std_assists']:.2f}</span></div>
+            {pct_bar(s['expected_assists'], max_xa, "var(--accent-a)")}
+          </td>
+        </tr>"""
+    return f"""
+    <div class="scorers-section">
+      <h3 class="scorers-title">Kandidáti na góly – {team_name}</h3>
+      <div class="table-wrap">
+        <table class="scorers-table">
+          <thead>
+            <tr>
+              <th>Hráč</th>
+              <th>Z</th><th>G</th><th>A</th>
+              <th>Pravd. gólu</th>
+              <th>xG ± σ</th>
+              <th>Pravd. asistence</th>
+              <th>xA ± σ</th>
+            </tr>
+          </thead>
+          <tbody>{rows_html}</tbody>
+        </table>
+      </div>
+    </div>"""
+
+
+def match_card_html(res, idx):
+    home = res["home"]
+    away = res["away"]
+
+    # Pravděpodobnostní trojúhelník
+    pw = res["prob_home_win"] * 100
+    pd_ = res["prob_draw"]    * 100
+    pa = res["prob_away_win"] * 100
+
+    h2h_html = ""
+    if res["h2h_h"] is not None:
+        h2h_html = f"""<div class="h2h-row">
+          <span class="h2h-label">H2H průměr</span>
+          <span class="h2h-score">{res['h2h_h']:.1f} : {res['h2h_a']:.1f}</span>
+          <span class="h2h-count">({res['n_h2h']} {'zápas' if res['n_h2h'] == 1 else 'zápasů'})</span>
+        </div>"""
+
+    fh = res["form_home"]
+    fa = res["form_away"]
+
+    top_scores_html = ""
+    for s in res["top_scores"]:
+        top_scores_html += f"""<div class="score-pill">
+          <span class="score-result">{s['h']}:{s['a']}</span>
+          <span class="score-pct">{s['pct']:.1f}%</span>
+        </div>"""
+
+    scorers_html = (
+        scorers_table_html(res["scorers_home"], home, res["lam_h"]) +
+        scorers_table_html(res["scorers_away"], away, res["lam_a"])
+    )
+
+    return f"""
+  <article class="match-card" id="match-{idx}">
+    <header class="match-header">
+      <div class="match-num">ZÁPAS {idx+1}</div>
+      <div class="match-teams">
+        <span class="team-home">{home}</span>
+        <span class="vs">vs</span>
+        <span class="team-away">{away}</span>
+      </div>
+    </header>
+
+    <div class="match-body">
+      <!-- Očekávané góly + forma -->
+      <div class="xg-block">
+        <div class="xg-side home-side">
+          <div class="xg-value">{res['lam_h']:.2f}</div>
+          <div class="xg-label">xG domácí</div>
+          <div class="xg-std">σ = {res['lam_h_std']:.2f}</div>
+        </div>
+        <div class="xg-divider">
+          <div class="xg-colon">:</div>
+          <div class="xg-total-label">xG celkem<br><strong>{res['lam_h'] + res['lam_a']:.2f}</strong></div>
+        </div>
+        <div class="xg-side away-side">
+          <div class="xg-value">{res['lam_a']:.2f}</div>
+          <div class="xg-label">xG hosté</div>
+          <div class="xg-std">σ = {res['lam_a_std']:.2f}</div>
+        </div>
+      </div>
+
+      <!-- Win/draw/loss probs -->
+      <div class="probs-block">
+        <div class="prob-item">
+          <div class="prob-val">{pw:.1f}%</div>
+          <div class="prob-bar-wrap"><div class="prob-bar home-bar" style="height:{pw:.0f}%"></div></div>
+          <div class="prob-label">Výhra dom.</div>
+        </div>
+        <div class="prob-item">
+          <div class="prob-val">{pd_:.1f}%</div>
+          <div class="prob-bar-wrap"><div class="prob-bar draw-bar" style="height:{pd_:.0f}%"></div></div>
+          <div class="prob-label">Remíza</div>
+        </div>
+        <div class="prob-item">
+          <div class="prob-val">{pa:.1f}%</div>
+          <div class="prob-bar-wrap"><div class="prob-bar away-bar" style="height:{pa:.0f}%"></div></div>
+          <div class="prob-label">Výhra hostů</div>
+        </div>
+      </div>
+
+      <!-- Nejprav. výsledky -->
+      <div class="scores-block">
+        <div class="block-title">Nejpravděpodobnější výsledky</div>
+        <div class="scores-grid">{top_scores_html}</div>
+        <div class="avg-goals">Průměr gólů v zápase: <strong>{res['avg_total_goals']:.1f}</strong></div>
+      </div>
+
+      <!-- Forma + H2H -->
+      <div class="form-block">
+        <div class="block-title">Forma & H2H</div>
+        <div class="form-grid">
+          <div class="form-team">
+            <div class="form-name">{home}</div>
+            <div class="form-stats">
+              <span>GF <strong>{fh['form_gf']:.1f}</strong></span>
+              <span>GA <strong>{fh['form_ga']:.1f}</strong></span>
+              <span>Body/z <strong>{fh['form_pts']:.1f}</strong></span>
+            </div>
+          </div>
+          <div class="form-team">
+            <div class="form-name">{away}</div>
+            <div class="form-stats">
+              <span>GF <strong>{fa['form_gf']:.1f}</strong></span>
+              <span>GA <strong>{fa['form_ga']:.1f}</strong></span>
+              <span>Body/z <strong>{fa['form_pts']:.1f}</strong></span>
+            </div>
+          </div>
+        </div>
+        {h2h_html}
+      </div>
+    </div>
+
+    <!-- Střelci -->
+    <div class="scorers-block">
+      {scorers_html}
+    </div>
+  </article>"""
+
+
+def generate_html(results):
+    cards = "".join(match_card_html(r, i) for i, r in enumerate(results))
+    now   = datetime.now().strftime("%d. %m. %Y %H:%M")
+
+    return f"""<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Florbal Simulátor – Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Barlow:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {{
+    --bg:        #0d0f14;
+    --bg2:       #13161e;
+    --bg3:       #1a1e28;
+    --border:    #252a38;
+    --text:      #e8ecf4;
+    --muted:     #7a8399;
+    --accent:    #00d4ff;
+    --accent-g:  #00e87a;
+    --accent-a:  #ff7c2a;
+    --home-clr:  #4d9cff;
+    --away-clr:  #ff4d7c;
+    --draw-clr:  #f0c040;
+    --gold:      #ffd700;
+    --silver:    #c0c8d8;
+    --bronze:    #cd7f32;
+    --radius:    12px;
+    --radius-sm: 6px;
+    --font-head: 'Barlow Condensed', sans-serif;
+    --font-body: 'Barlow', sans-serif;
+  }}
+
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+
+  body {{
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-weight: 300;
+    line-height: 1.5;
+    min-height: 100vh;
+  }}
+
+  /* ── Noise overlay ── */
+  body::before {{
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }}
+
+  /* ── Header ── */
+  .site-header {{
+    background: linear-gradient(135deg, #0d1220 0%, #111827 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 40px 32px 32px;
+    position: relative;
+    overflow: hidden;
+  }}
+  .site-header::after {{
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0;
+    width: 100%; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }}
+  .header-inner {{
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+  }}
+  .logo {{
+    font-family: var(--font-head);
+    font-size: 2.8rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    line-height: 1;
+    color: var(--text);
+  }}
+  .logo span {{
+    color: var(--accent);
+  }}
+  .meta {{
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.7;
+  }}
+  .meta strong {{ color: var(--text); }}
+
+  /* ── Layout ── */
+  .container {{
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+    position: relative;
+    z-index: 1;
+  }}
+
+  /* ── Match card ── */
+  .match-card {{
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 48px;
+    overflow: hidden;
+  }}
+
+  .match-header {{
+    background: linear-gradient(135deg, #141928, #1c2236);
+    padding: 24px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }}
+  .match-num {{
+    font-family: var(--font-head);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--accent);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }}
+  .match-teams {{
+    font-family: var(--font-head);
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }}
+  .team-home {{ color: var(--home-clr); }}
+  .team-away {{ color: var(--away-clr); }}
+  .vs {{
+    color: var(--muted);
+    font-size: 1rem;
+    font-weight: 400;
+  }}
+
+  .match-body {{
+    display: grid;
+    grid-template-columns: auto 1fr 1fr 1fr;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+  }}
+
+  /* ── xG block ── */
+  .xg-block {{
+    display: flex;
+    align-items: center;
+    padding: 28px 24px;
+    gap: 16px;
+    border-right: 1px solid var(--border);
+    background: linear-gradient(180deg, #131726 0%, #0f1320 100%);
+  }}
+  .xg-side {{
+    text-align: center;
+    min-width: 72px;
+  }}
+  .xg-value {{
+    font-family: var(--font-head);
+    font-size: 2.8rem;
+    font-weight: 800;
+    line-height: 1;
+  }}
+  .home-side .xg-value {{ color: var(--home-clr); }}
+  .away-side .xg-value {{ color: var(--away-clr); }}
+  .xg-label {{
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin-top: 4px;
+  }}
+  .xg-std {{
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-top: 2px;
+  }}
+  .xg-divider {{
+    text-align: center;
+  }}
+  .xg-colon {{
+    font-family: var(--font-head);
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--muted);
+  }}
+  .xg-total-label {{
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin-top: 4px;
+  }}
+  .xg-total-label strong {{
+    color: var(--text);
+    font-size: 0.85rem;
+    font-family: var(--font-head);
+  }}
+
+  /* ── Probs block ── */
+  .probs-block {{
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 12px;
+    padding: 28px 20px 20px;
+    border-right: 1px solid var(--border);
+  }}
+  .prob-item {{
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 56px;
+  }}
+  .prob-val {{
+    font-family: var(--font-head);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text);
+  }}
+  .prob-bar-wrap {{
+    width: 28px;
+    height: 60px;
+    background: var(--bg3);
+    border-radius: 4px;
+    display: flex;
+    align-items: flex-end;
+    overflow: hidden;
+  }}
+  .prob-bar {{
+    width: 100%;
+    border-radius: 4px 4px 0 0;
+    min-height: 2px;
+    transition: height 0.5s ease;
+  }}
+  .home-bar {{ background: var(--home-clr); }}
+  .draw-bar {{ background: var(--draw-clr); }}
+  .away-bar {{ background: var(--away-clr); }}
+  .prob-label {{
+    font-size: 0.6rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    line-height: 1.2;
+  }}
+
+  /* ── Scores block ── */
+  .scores-block {{
+    padding: 24px 20px;
+    border-right: 1px solid var(--border);
+  }}
+  .block-title {{
+    font-family: var(--font-head);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }}
+  .scores-grid {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+  }}
+  .score-pill {{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 10px;
+  }}
+  .score-result {{
+    font-family: var(--font-head);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text);
+  }}
+  .score-pct {{
+    font-size: 0.72rem;
+    color: var(--accent);
+    font-weight: 500;
+  }}
+  .avg-goals {{
+    font-size: 0.78rem;
+    color: var(--muted);
+  }}
+  .avg-goals strong {{ color: var(--text); }}
+
+  /* ── Form block ── */
+  .form-block {{
+    padding: 24px 20px;
+  }}
+  .form-grid {{
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 12px;
+  }}
+  .form-name {{
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 4px;
+  }}
+  .form-stats {{
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }}
+  .form-stats span {{
+    font-size: 0.72rem;
+    color: var(--muted);
+  }}
+  .form-stats strong {{ color: var(--text); }}
+  .h2h-row {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.75rem;
+    color: var(--muted);
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+  }}
+  .h2h-score {{
+    font-family: var(--font-head);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+  }}
+
+  /* ── Scorers ── */
+  .scorers-block {{
+    padding: 0 32px 32px;
+  }}
+  .scorers-section {{
+    margin-top: 28px;
+  }}
+  .scorers-title {{
+    font-family: var(--font-head);
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }}
+  .table-wrap {{
+    overflow-x: auto;
+    border-radius: var(--radius-sm);
+  }}
+  .scorers-table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    min-width: 680px;
+  }}
+  .scorers-table th {{
+    font-family: var(--font-head);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-align: left;
+    padding: 8px 12px;
+    background: var(--bg3);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }}
+  .scorers-table th:not(:first-child) {{ text-align: center; }}
+  .player-row {{
+    transition: background 0.15s;
+    border-bottom: 1px solid var(--border);
+  }}
+  .player-row:last-child {{ border-bottom: none; }}
+  .player-row:hover {{ background: var(--bg3); }}
+  .player-name {{
+    padding: 10px 12px;
+    font-weight: 500;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }}
+  .stat-cell {{
+    padding: 10px 12px;
+    text-align: center;
+    color: var(--muted);
+  }}
+  .bar-cell {{
+    padding: 8px 12px;
+    min-width: 120px;
+  }}
+  .bar-label {{
+    font-size: 0.78rem;
+    color: var(--text);
+    margin-bottom: 4px;
+    text-align: right;
+  }}
+  .sigma {{
+    font-size: 0.68rem;
+    color: var(--muted);
+  }}
+  .bar-track {{
+    height: 4px;
+    background: var(--bg3);
+    border-radius: 2px;
+    overflow: hidden;
+  }}
+  .bar-fill {{
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.4s ease;
+  }}
+  .medal {{ font-size: 0.85rem; }}
+  .gold   {{ color: var(--gold);   }}
+  .silver {{ color: var(--silver); }}
+  .bronze {{ color: var(--bronze); }}
+
+  .no-data {{
+    color: var(--muted);
+    font-style: italic;
+    padding: 16px 0;
+    font-size: 0.85rem;
+  }}
+
+  /* ── Footer ── */
+  footer {{
+    text-align: center;
+    padding: 24px;
+    color: var(--muted);
+    font-size: 0.75rem;
+    border-top: 1px solid var(--border);
+    position: relative;
+    z-index: 1;
+  }}
+
+  @media (max-width: 860px) {{
+    .match-body {{
+      grid-template-columns: 1fr 1fr;
+    }}
+    .form-block {{
+      grid-column: 1 / -1;
+      border-top: 1px solid var(--border);
+    }}
+  }}
+  @media (max-width: 600px) {{
+    .match-body {{ grid-template-columns: 1fr; }}
+    .xg-block, .probs-block, .scores-block, .form-block {{
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+    }}
+    .match-teams {{ font-size: 1.1rem; }}
+    .scorers-block {{ padding: 0 16px 24px; }}
+  }}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <div>
+      <div class="logo">Florbal<span>Sim</span></div>
+    </div>
+    <div class="meta">
+      Generováno: <strong>{now}</strong><br>
+      Simulace: <strong>{N_SIM:,}</strong> iterací &nbsp;|&nbsp;
+      Model: <strong>Poissonova regrese</strong><br>
+      Decay: <strong>{DECAY}</strong> &nbsp;|&nbsp;
+      Forma: poslední <strong>{TEAM_FORM_N}</strong> kol
+    </div>
+  </div>
+</header>
+
+<main class="container">
+  {cards}
+</main>
+
+<footer>
+  Florbal Simulátor &copy; {datetime.now().year} &nbsp;|&nbsp;
+  Data: ceskyflorbal.cz &nbsp;|&nbsp;
+  Výsledky jsou pouze statistické odhady.
+</footer>
+
+</body>
+</html>"""
+
+
+# ── Spuštění ───────────────────────────────────────────────
+
+print(f"\nSpouštím {len(MATCHES_TO_SIMULATE)} simulací...")
+results = []
 for home, away in MATCHES_TO_SIMULATE:
-    simulate(home, away)
+    print(f"  Simuluji: {home} vs {away}")
+    results.append(simulate(home, away))
+
+html = generate_html(results)
+Path(HTML_OUTPUT).write_text(html, encoding="utf-8")
+print(f"\nReport uložen do: {HTML_OUTPUT}")
+print(f"Otevřete v prohlížeči: file://{Path(HTML_OUTPUT).resolve()}")
