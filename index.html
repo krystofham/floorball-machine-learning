@@ -1,0 +1,1177 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Florbal simulátor – VIT</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f5f4f0;
+    --surface: #ffffff;
+    --surface2: #f1efe8;
+    --border: rgba(0,0,0,0.12);
+    --border2: rgba(0,0,0,0.22);
+    --text: #1a1a18;
+    --text2: #5f5e5a;
+    --text3: #888780;
+    --accent: #185fa5;
+    --accent-bg: #e6f1fb;
+    --accent-text: #0c447c;
+    --green: #3b6d11;
+    --green-bg: #eaf3de;
+    --green-text: #27500a;
+    --red: #a32d2d;
+    --red-bg: #fcebeb;
+    --red-text: #791f1f;
+    --amber: #854f0b;
+    --amber-bg: #faeeda;
+    --amber-text: #633806;
+    --radius: 10px;
+    --radius-sm: 6px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1a;
+      --surface: #252523;
+      --surface2: #2c2c2a;
+      --border: rgba(255,255,255,0.10);
+      --border2: rgba(255,255,255,0.20);
+      --text: #f1efe8;
+      --text2: #b4b2a9;
+      --text3: #888780;
+      --accent: #378add;
+      --accent-bg: #0c447c;
+      --accent-text: #b5d4f4;
+      --green: #97c459;
+      --green-bg: #27500a;
+      --green-text: #c0dd97;
+      --red: #f09595;
+      --red-bg: #791f1f;
+      --red-text: #f7c1c1;
+      --amber: #ef9f27;
+      --amber-bg: #633806;
+      --amber-text: #fac775;
+    }
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  header {
+    background: var(--surface);
+    border-bottom: 0.5px solid var(--border);
+    padding: 1.25rem 2rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .logo {
+    width: 36px; height: 36px;
+    background: var(--accent-bg);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+
+  header h1 { font-size: 17px; font-weight: 500; }
+  header p { font-size: 13px; color: var(--text2); margin-top: 1px; }
+
+  .badge {
+    margin-left: auto;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: var(--accent-bg);
+    color: var(--accent-text);
+    font-weight: 500;
+    border: 0.5px solid var(--border);
+  }
+
+  main { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+  .match-tabs {
+    display: flex; gap: 8px; margin-bottom: 2rem;
+  }
+
+  .tab-btn {
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    border: 0.5px solid var(--border2);
+    background: var(--surface);
+    color: var(--text2);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-weight: 500;
+  }
+  .tab-btn:hover { background: var(--surface2); color: var(--text); }
+  .tab-btn.active {
+    background: var(--accent-bg);
+    color: var(--accent-text);
+    border-color: var(--accent);
+  }
+
+  .match-panel { display: none; }
+  .match-panel.active { display: block; }
+
+  .match-header {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .teams-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .team-name {
+    font-size: 15px;
+    font-weight: 500;
+    text-align: center;
+    flex: 1;
+  }
+
+  .vs-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .vs { font-size: 12px; color: var(--text3); }
+
+  .expected-goals {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    font-size: 22px;
+    font-weight: 500;
+  }
+
+  .exp-sep { font-size: 14px; color: var(--text3); margin: 0 2px; }
+
+  .meta-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    padding-top: 1.25rem;
+    border-top: 0.5px solid var(--border);
+  }
+
+  .meta-card {
+    background: var(--surface2);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+  }
+
+  .meta-label {
+    font-size: 11px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+  }
+
+  .meta-value { font-size: 14px; font-weight: 500; }
+  .meta-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+  .section-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 1.75rem 0 0.75rem;
+  }
+
+  .probs-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 1.25rem;
+  }
+
+  .prob-card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+    text-align: center;
+  }
+
+  .prob-pct {
+    font-size: 26px;
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+
+  .prob-label { font-size: 12px; color: var(--text2); }
+
+  .prob-card.home .prob-pct { color: var(--accent); }
+  .prob-card.away .prob-pct { color: var(--red); }
+  .prob-card.draw .prob-pct { color: var(--text2); }
+
+  .prob-bar {
+    display: flex;
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 1.25rem;
+    background: var(--surface2);
+  }
+
+  .bar-home { background: var(--accent); }
+  .bar-draw { background: var(--border2); }
+  .bar-away { background: var(--red); }
+
+  .scores-grid {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+  }
+
+  .score-pill {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 14px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .score-pill .sc { font-weight: 500; }
+  .score-pill .pct { color: var(--text3); font-size: 12px; }
+
+  .score-pill:first-child {
+    background: var(--accent-bg);
+    border-color: var(--accent);
+  }
+  .score-pill:first-child .sc { color: var(--accent-text); }
+
+  .players-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+    margin-bottom: 2rem;
+  }
+
+  @media (max-width: 640px) {
+    .players-grid { grid-template-columns: 1fr; }
+    .probs-row { grid-template-columns: 1fr; }
+  }
+
+  .players-card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .players-card-header {
+    padding: 10px 14px;
+    background: var(--surface2);
+    border-bottom: 0.5px solid var(--border);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .player-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 14px;
+    gap: 10px;
+    border-bottom: 0.5px solid var(--border);
+    transition: background 0.1s;
+  }
+  .player-row:last-child { border-bottom: none; }
+  .player-row:hover { background: var(--surface2); }
+
+  .player-rank {
+    font-size: 11px;
+    color: var(--text3);
+    width: 16px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .player-info { flex: 1; min-width: 0; }
+
+  .player-name {
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .player-stats-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  .stat-chip {
+    font-size: 11px;
+    color: var(--text3);
+  }
+
+  .stat-chip span { color: var(--text2); font-weight: 500; }
+
+  .goal-bar-wrap {
+    width: 80px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+  }
+
+  .goal-pct-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent-text);
+  }
+
+  .goal-bar-bg {
+    width: 100%;
+    height: 3px;
+    background: var(--surface2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .goal-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 1.25rem;
+  }
+
+  .form-card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+  }
+
+  .form-card-title {
+    font-size: 12px;
+    color: var(--text3);
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+
+  .form-stats {
+    display: flex;
+    gap: 12px;
+  }
+
+  .form-stat { text-align: center; }
+  .form-stat-val { font-size: 18px; font-weight: 500; }
+  .form-stat-lbl { font-size: 11px; color: var(--text3); }
+
+  .h2h-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text2);
+    background: var(--amber-bg);
+    color: var(--amber-text);
+    border-radius: var(--radius-sm);
+    padding: 4px 10px;
+    margin-bottom: 1rem;
+  }
+
+  footer {
+    text-align: center;
+    padding: 2rem;
+    font-size: 12px;
+    color: var(--text3);
+    border-top: 0.5px solid var(--border);
+    margin-top: 2rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🏑</div>
+  <div>
+    <h1>Florbal simulátor</h1>
+    <p>3. liga juniorů – skupina 7 · sezóna 2025/26</p>
+  </div>
+  <span class="badge">100 000 simulací</span>
+</header>
+
+<main>
+
+  <div class="match-tabs">
+    <button class="tab-btn active" onclick="switchTab(0)">VIT vs PORUBA</button>
+    <button class="tab-btn" onclick="switchTab(1)">VIT vs HORNÍ SUCHÁ</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       ZÁPAS 1: Vítkovice B vs FBC Tigers Poruba
+  ═══════════════════════════════════════════════════ -->
+  <div class="match-panel active" id="panel-0">
+
+    <div class="match-header">
+      <div class="teams-row">
+        <div class="team-name">1. SC NATIOS<br>Vítkovice B</div>
+        <div class="vs-box">
+          <div class="vs">očekávané góly</div>
+          <div class="expected-goals">
+            <span>9.91</span>
+            <span class="exp-sep">:</span>
+            <span>2.82</span>
+          </div>
+          <div class="vs">σ ± 3.15 &nbsp;/&nbsp; ± 1.68</div>
+        </div>
+        <div class="team-name">FBC TIGERS<br>Poruba</div>
+      </div>
+
+      <div class="meta-row">
+        <div class="meta-card">
+          <div class="meta-label">H2H průměr</div>
+          <div class="meta-value">4.0 : 6.0</div>
+          <div class="meta-sub">1 vzájemný zápas</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Forma VIT (GF / GA)</div>
+          <div class="meta-value">7.2 / 2.2</div>
+          <div class="meta-sub">body/z: 3.0</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Forma POR (GF / GA)</div>
+          <div class="meta-value">3.0 / 11.5</div>
+          <div class="meta-sub">body/z: 1.0</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Průměr gólů</div>
+          <div class="meta-value">12.7</div>
+          <div class="meta-sub">σ dom=3.15, host=1.68</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="probs-row">
+      <div class="prob-card home">
+        <div class="prob-pct">97.3%</div>
+        <div class="prob-label">Výhra Vítkovice</div>
+      </div>
+      <div class="prob-card draw">
+        <div class="prob-pct">1.4%</div>
+        <div class="prob-label">Remíza (60 min)</div>
+      </div>
+      <div class="prob-card away">
+        <div class="prob-pct">1.3%</div>
+        <div class="prob-label">Výhra Poruba</div>
+      </div>
+    </div>
+
+    <div class="prob-bar">
+      <div class="bar-home" style="width:97.3%"></div>
+      <div class="bar-draw" style="width:1.4%"></div>
+      <div class="bar-away" style="width:1.3%"></div>
+    </div>
+
+    <div class="section-title">Nejpravděpodobnější výsledky</div>
+    <div class="scores-grid">
+      <div class="score-pill"><span class="sc">9:2</span><span class="pct">3.0%</span></div>
+      <div class="score-pill"><span class="sc">10:2</span><span class="pct">2.8%</span></div>
+      <div class="score-pill"><span class="sc">10:3</span><span class="pct">2.8%</span></div>
+      <div class="score-pill"><span class="sc">9:3</span><span class="pct">2.8%</span></div>
+      <div class="score-pill"><span class="sc">11:2</span><span class="pct">2.6%</span></div>
+    </div>
+
+    <div class="section-title">Kandidáti na góly</div>
+
+    <div class="players-grid">
+      <div class="players-card">
+        <div class="players-card-header">🏠 1. SC NATIOS Vítkovice B</div>
+
+        <div class="player-row">
+          <div class="player-rank">1</div>
+          <div class="player-info">
+            <div class="player-name">Jakub Illek</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>38</span>G / <span>24</span>A / <span>28</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">72.5%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:72.5%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">2</div>
+          <div class="player-info">
+            <div class="player-name">Alexandr Tománek</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>10</span>G / <span>3</span>A / <span>18</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">66.9%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:66.9%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">3</div>
+          <div class="player-info">
+            <div class="player-name">Jiří Chvěja</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>22</span>G / <span>16</span>A / <span>45</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">58.3%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:58.3%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">4</div>
+          <div class="player-info">
+            <div class="player-name">Jakub Kolář</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>18</span>G / <span>15</span>A / <span>32</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">57.6%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:57.6%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">5</div>
+          <div class="player-info">
+            <div class="player-name">Dominik Novák</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>15</span>G / <span>16</span>A / <span>32</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">51.7%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:51.7%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">6</div>
+          <div class="player-info">
+            <div class="player-name">Lukáš Sikora</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>13</span>G / <span>22</span>A / <span>41</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">44.3%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:44.3%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">7</div>
+          <div class="player-info">
+            <div class="player-name">Václav Bura</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>4</span>G / <span>2</span>A / <span>6</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">43.4%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:43.4%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">8</div>
+          <div class="player-info">
+            <div class="player-name">Tomáš Scholz</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>20</span>G / <span>10</span>A / <span>34</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">40.3%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:40.3%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">9</div>
+          <div class="player-info">
+            <div class="player-name">Richard Stuchlík</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>5</span>G / <span>4</span>A / <span>18</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">38.1%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:38.1%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">10</div>
+          <div class="player-info">
+            <div class="player-name">Kryštof Ham</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>8</span>G / <span>3</span>A / <span>20</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">34.7%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:34.7%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">11</div>
+          <div class="player-info">
+            <div class="player-name">Ondřej Výtisk</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>15</span>G / <span>8</span>A / <span>36</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">35.1%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:35.1%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">12</div>
+          <div class="player-info">
+            <div class="player-name">Jakub Novák</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>15</span>G / <span>18</span>A / <span>32</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">36.7%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:36.7%"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="players-card">
+        <div class="players-card-header">✈ FBC Tigers Poruba</div>
+
+        <div class="player-row">
+          <div class="player-rank">1</div>
+          <div class="player-info">
+            <div class="player-name">David Mintěl</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>27</span>G / <span>19</span>A / <span>38</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">41.9%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:41.9%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">2</div>
+          <div class="player-info">
+            <div class="player-name">Robert Gajda</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>19</span>G / <span>23</span>A / <span>26</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">38.3%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:38.3%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">3</div>
+          <div class="player-info">
+            <div class="player-name">Jakub Timel</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>32</span>G / <span>21</span>A / <span>31</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">33.3%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:33.3%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">4</div>
+          <div class="player-info">
+            <div class="player-name">Patrik Lazecký</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>18</span>G / <span>9</span>A / <span>25</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">27.6%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:27.6%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">5</div>
+          <div class="player-info">
+            <div class="player-name">Vojtěch Kuchta</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>6</span>G / <span>1</span>A / <span>14</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">18.7%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:18.7%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">6</div>
+          <div class="player-info">
+            <div class="player-name">Matyáš Kulich</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>6</span>G / <span>2</span>A / <span>18</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">15.6%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:15.6%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">7</div>
+          <div class="player-info">
+            <div class="player-name">Jakub Korynta</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>9</span>G / <span>5</span>A / <span>29</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">14.4%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:14.4%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">8</div>
+          <div class="player-info">
+            <div class="player-name">Dominik Korpass</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>3</span>G / <span>2</span>A / <span>14</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">15.4%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:15.4%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">9</div>
+          <div class="player-info">
+            <div class="player-name">Mikuláš Kurka</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>5</span>G / <span>1</span>A / <span>19</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">13.2%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:13.2%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">10</div>
+          <div class="player-info">
+            <div class="player-name">Damián Kubín</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>3</span>G / <span>4</span>A / <span>30</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">8.2%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:8.2%"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       ZÁPAS 2: Vítkovice B vs FbK Horní Suchá
+  ═══════════════════════════════════════════════════ -->
+  <div class="match-panel" id="panel-1">
+
+    <div class="match-header">
+      <div class="teams-row">
+        <div class="team-name">1. SC NATIOS<br>Vítkovice B</div>
+        <div class="vs-box">
+          <div class="vs">očekávané góly</div>
+          <div class="expected-goals">
+            <span>2.77</span>
+            <span class="exp-sep">:</span>
+            <span>3.14</span>
+          </div>
+          <div class="vs">σ ± 1.66 &nbsp;/&nbsp; ± 1.77</div>
+        </div>
+        <div class="team-name">FbK Horní<br>Suchá</div>
+      </div>
+
+      <div class="meta-row">
+        <div class="meta-card">
+          <div class="meta-label">H2H průměr</div>
+          <div class="meta-value">1.0 : 3.0</div>
+          <div class="meta-sub">1 vzájemný zápas</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Forma VIT (GF / GA)</div>
+          <div class="meta-value">7.2 / 2.2</div>
+          <div class="meta-sub">body/z: 3.0</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Forma HSH (GF / GA)</div>
+          <div class="meta-value">7.2 / 1.3</div>
+          <div class="meta-sub">body/z: 3.0</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Průměr gólů</div>
+          <div class="meta-value">5.9</div>
+          <div class="meta-sub">σ dom=1.67, host=1.77</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="h2h-note">
+      ⚠ Jediný vzájemný zápas skončil 3:1 pro Horní Suchou – vliv 20 % na predikci
+    </div>
+
+    <div class="probs-row">
+      <div class="prob-card home">
+        <div class="prob-pct">35.9%</div>
+        <div class="prob-label">Výhra Vítkovice</div>
+      </div>
+      <div class="prob-card draw">
+        <div class="prob-pct">16.4%</div>
+        <div class="prob-label">Remíza (60 min)</div>
+      </div>
+      <div class="prob-card away">
+        <div class="prob-pct">47.7%</div>
+        <div class="prob-label">Výhra Horní Suchá</div>
+      </div>
+    </div>
+
+    <div class="prob-bar">
+      <div class="bar-home" style="width:35.9%"></div>
+      <div class="bar-draw" style="width:16.4%"></div>
+      <div class="bar-away" style="width:47.7%"></div>
+    </div>
+
+    <div class="section-title">Nejpravděpodobnější výsledky</div>
+    <div class="scores-grid">
+      <div class="score-pill"><span class="sc">2:3</span><span class="pct">5.4%</span></div>
+      <div class="score-pill"><span class="sc">2:2</span><span class="pct">5.0%</span></div>
+      <div class="score-pill"><span class="sc">3:3</span><span class="pct">4.9%</span></div>
+      <div class="score-pill"><span class="sc">3:2</span><span class="pct">4.8%</span></div>
+      <div class="score-pill"><span class="sc">2:4</span><span class="pct">4.2%</span></div>
+    </div>
+
+    <div class="section-title">Kandidáti na góly</div>
+
+    <div class="players-grid">
+      <div class="players-card">
+        <div class="players-card-header">🏠 1. SC NATIOS Vítkovice B</div>
+
+        <div class="player-row">
+          <div class="player-rank">1</div>
+          <div class="player-info">
+            <div class="player-name">Jakub Illek</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>38</span>G / <span>24</span>A / <span>28</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">30.2%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:30.2%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">2</div>
+          <div class="player-info">
+            <div class="player-name">Alexandr Tománek</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>10</span>G / <span>3</span>A / <span>18</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">26.6%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:26.6%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">3</div>
+          <div class="player-info">
+            <div class="player-name">Jiří Chvěja</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>22</span>G / <span>16</span>A / <span>45</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">21.7%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:21.7%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">4</div>
+          <div class="player-info">
+            <div class="player-name">Jakub Kolář</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>18</span>G / <span>15</span>A / <span>32</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">21.3%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:21.3%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">5</div>
+          <div class="player-info">
+            <div class="player-name">Dominik Novák</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>15</span>G / <span>16</span>A / <span>32</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">18.4%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:18.4%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">6</div>
+          <div class="player-info">
+            <div class="player-name">Lukáš Sikora</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>13</span>G / <span>22</span>A / <span>41</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">15.1%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:15.1%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">7</div>
+          <div class="player-info">
+            <div class="player-name">Václav Bura</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>4</span>G / <span>2</span>A / <span>6</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">14.7%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:14.7%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">8</div>
+          <div class="player-info">
+            <div class="player-name">Kryštof Ham</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>8</span>G / <span>3</span>A / <span>20</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">11.2%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:11.2%"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="players-card">
+        <div class="players-card-header">✈ FbK Horní Suchá</div>
+
+        <div class="player-row">
+          <div class="player-rank">1</div>
+          <div class="player-info">
+            <div class="player-name">Rafał Polok</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>48</span>G / <span>28</span>A / <span>36</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">42.9%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:42.9%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">2</div>
+          <div class="player-info">
+            <div class="player-name">Denis Chrobák</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>11</span>G / <span>10</span>A / <span>22</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">39.7%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:39.7%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">3</div>
+          <div class="player-info">
+            <div class="player-name">Jan Chobot</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>33</span>G / <span>29</span>A / <span>35</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">33.0%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:33.0%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">4</div>
+          <div class="player-info">
+            <div class="player-name">Daniel Holeš</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>16</span>G / <span>20</span>A / <span>36</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">32.3%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:32.3%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">5</div>
+          <div class="player-info">
+            <div class="player-name">Matyáš Habas</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>4</span>G / <span>1</span>A / <span>6</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">22.6%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:22.6%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">6</div>
+          <div class="player-info">
+            <div class="player-name">Vojtěch Slonka</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>21</span>G / <span>15</span>A / <span>40</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">19.6%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:19.6%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">7</div>
+          <div class="player-info">
+            <div class="player-name">Denis Seman</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>1</span>G / <span>1</span>A / <span>3</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">18.2%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:18.2%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">8</div>
+          <div class="player-info">
+            <div class="player-name">Jakub Hofmann</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>13</span>G / <span>14</span>A / <span>40</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">13.3%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:13.3%"></div></div>
+          </div>
+        </div>
+
+        <div class="player-row">
+          <div class="player-rank">9</div>
+          <div class="player-info">
+            <div class="player-name">Adam Vašina</div>
+            <div class="player-stats-row">
+              <div class="stat-chip"><span>10</span>G / <span>20</span>A / <span>35</span>Z</div>
+            </div>
+          </div>
+          <div class="goal-bar-wrap">
+            <div class="goal-pct-label">9.4%</div>
+            <div class="goal-bar-bg"><div class="goal-bar-fill" style="width:9.4%"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  Simulátor Poisson · 100 000 iterací · data: ceskyflorbal.cz · vygenerováno dnes
+</footer>
+
+<script>
+  function switchTab(idx) {
+    document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+    document.querySelectorAll('.match-panel').forEach((p, i) => p.classList.toggle('active', i === idx));
+  }
+</script>
+
+</body>
+</html>
